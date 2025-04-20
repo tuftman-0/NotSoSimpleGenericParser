@@ -13,7 +13,7 @@
         haskellPackages = pkgs.haskellPackages;
       in
       {
-        packages.default = haskellPackages.callCabal2nix "SimpleGenericParser" ./. {};
+        packages.default = haskellPackages.callCabal2nix "NotSoSimpleGenericParser" ./. { };
 
         devShell = pkgs.mkShell {
           buildInputs = with pkgs; [

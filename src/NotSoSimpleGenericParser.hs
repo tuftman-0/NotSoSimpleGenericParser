@@ -7,7 +7,7 @@
 {-# LANGUAGE InstanceSigs #-}
 
 
-module SimpleGenericParser (
+module NotSoSimpleGenericParser (
     -- Types
     Parser (..),
     -- ParserResult (..),

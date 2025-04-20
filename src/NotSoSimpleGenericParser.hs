@@ -33,6 +33,8 @@ module NotSoSimpleGenericParser (
     sepBy1,
     many,
     some,
+    modifyError,
+    lookAhead,
     -- Character parsers for String
     char,
     string,

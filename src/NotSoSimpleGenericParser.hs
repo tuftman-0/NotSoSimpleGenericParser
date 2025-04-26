@@ -50,9 +50,10 @@ module NotSoSimpleGenericParser (
 import Control.Applicative (Alternative (..))
 import Data.Monoid (Monoid, mappend, mempty)
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
-import Data.Foldable (asum)
+import Data.Foldable (asum, Foldable (toList))
 import Data.Kind (Type)
 import qualified Data.List as List
+import Control.Monad (ap)
 
 type ParseError = String
 
@@ -100,7 +101,7 @@ class (Eq (Elem s), Show (Elem s)) => Stream s where
     splitAtS :: Int -> s -> (s, s)
 
     -- Test for prefix
-    isSeqPrefixOf :: [Elem s] -> s -> Bool
+    isPrefixOfS :: [Elem s] -> s -> Bool
 
     -- Convert to string for error messages
     showInput :: s -> String
@@ -119,7 +120,7 @@ instance (Eq a, Show a) => Stream [a] where
     dropS = drop
     splitAtS = splitAt
 
-    isSeqPrefixOf = List.isPrefixOf
+    isPrefixOfS = List.isPrefixOf
     showInput = show
 
 instance Functor (Parser s) where
@@ -129,6 +130,7 @@ instance Functor (Parser s) where
             Failure err -> Failure err
 
 instance Applicative (Parser s) where
+    pure :: a -> Parser s a
     pure x = Parser $ \input -> Success (x, input)
 
     (<*>) :: Parser s (a -> b) -> Parser s a -> Parser s b
@@ -141,6 +143,7 @@ instance Applicative (Parser s) where
                     Success (x, rest') -> Success (f x, rest')
 
 instance Monad (Parser s) where
+    (>>=) :: Parser s a -> (a -> Parser s b) -> Parser s b
     parser >>= f = Parser $ \input ->
         case runParser parser input of
             Failure err -> Failure err
@@ -215,7 +218,7 @@ notToken t = satisfy (/= t) ("not " ++ show t)
 -- tokens ts = Parser $ \st ->
 --     let inp = input st
 --         st' =
---     in if ts `isSeqPrefixOf` inp
+--     in if ts `isPrefixOfS` inp
 --         then Success (ts, dropS (length ts) inp)
 --         else Failure ("Expected " ++ show ts, inp)
 
@@ -224,19 +227,37 @@ tokens :: (Stream s) => [Elem s] -> Parser s [Elem s]
 tokens ts = Parser $ \st ->
   let inp = input st
       n   = lengthS ts
-  in if ts `isSeqPrefixOf` inp
+  in if ts `isPrefixOfS` inp
         then let rest   = dropS n inp
                  newPos = pos st + n
                  newSt  = st { input = rest, pos = newPos }
              in Success (ts, newSt)
         else Failure ("Expected " ++ show ts, st)
 
-concatParsers :: (Foldable t, Monoid a) => t (Parser s a) -> Parser s a
-concatParsers = foldr (liftA2 mappend) (pure mempty)
--- concatParsers = foldr (\x y -> (<>) <$> x <*> y) (pure mempty)
 
-tokens' :: (Stream s) => [Elem s] -> Parser s [Elem s]
+tokens' :: (Stream s, Traversable t) => t (Elem s) -> Parser s (t (Elem s))
 tokens' = traverse token
+
+-- showElems :: t a -> [Char]
+-- showElems :: (Foldable t, Show a) => t a -> [Char]
+-- showElems =
+-- showElems ts = "\'" ++ concatMap show ts ++ "'"
+
+tokens'' :: (Stream s, Traversable t, Show (t (Elem s))) => t (Elem s) -> Parser s (t (Elem s))
+-- tokens'' :: (Stream s, Traversable t) => t (Elem s) -> Parser s (t (Elem s))
+tokens'' ts = traverse token ts `modifyError` \msg -> "in tokens (" ++ show ts ++ "): " ++ msg
+
+halve = splitAt =<< (`div` 2) . length
+-- tokens''' = (modifyError . traverse token) `ap` (const . ("expected " ++) . show)
+
+tokens''' :: (Stream s, Traversable t, Show (t (Elem s))) => t (Elem s) -> Parser s (t (Elem s))
+tokens''' = ap (modifyError . traverse token) ((("in tokens: " ++) .) . (++) . show)
+-- tokens''' = (modifyError . traverse token) `ap` ((("expected " ++) .) . (++) . show)
+
+-- foo :: a -> b -> [Char]
+-- foo = const . ("expected " ++) . show
+
+-- bar = ((("expected " ++) .) . (++) . show)
 
 -- Parse one of the tokens in the list
 -- oneOf :: (Stream s) => [Elem s] -> Parser s (Elem s)
@@ -250,10 +271,19 @@ noneOf ts = satisfy (`notElem` ts) ("none of " ++ show ts)
 
 -- tries a parser but on failure doesn't consume input
 try :: Parser s a -> Parser s a
-try p = Parser $ \input ->
-    case runParser p input of
-        Failure (msg, _) -> Failure (msg, input)
+try p = Parser $ \st ->
+    case runParser p st of
+        Failure (msg, _) -> Failure (msg, st)
         success -> success
+
+-- tries a parser but on success doesn't consume input
+lookAhead :: Parser s a -> Parser s a
+lookAhead p = Parser $ \st ->
+    case runParser p st of
+        Success (x, _) -> Success (x, st)
+        -- Failure (e, _) -> Failure (e, st)
+        failure -> falure
+
 
 -- modifies the error of a parser on failure using a function
 modifyError :: Parser s a -> (ParseError -> ParseError) -> Parser s a
@@ -262,12 +292,25 @@ modifyError parser modify = Parser $ \input ->
         Failure (msg, remaining) -> Failure (modify msg, remaining)
         success -> success
 
-lookAhead :: Parser s a -> Parser s a
-lookAhead p = Parser $ \st ->
+wConsumed :: (Stream s) => Parser s a -> Parser s (a, s)
+wConsumed p = Parser $ \st ->
     case runParser p st of
-        Success (x, _) -> Success (x, st)
-        failure -> failure
+        Success (x, st') -> Success ( (x, takeS (pos st' - pos st) (input st)), st' )
+        Failure (e, st') -> Failure (e, st')
 
+-- getTokens :: (Stream s) => s -> Either (ParseError, ParserState s) ([Elem s], ParserState s)
+-- getTokens s 
+
+
+
+-- wCapture :: (Stream s) => Parser s a -> Parser s (a, Parser s a)
+wCapture p = do
+    (result, consumed) <- wConsumed p
+    return (result, tokens' (toList consumed) *> pure result)
+
+concatParsers :: (Foldable t, Monoid a) => t (Parser s a) -> Parser s a
+concatParsers = foldr (liftA2 mappend) (pure mempty)
+-- concatParsers = foldr (\x y -> (<>) <$> x <*> y) (pure mempty)
 
 -- Parse optional value
 optional :: Parser s a -> Parser s (Maybe a)

@@ -18,4 +18,6 @@ library
     exposed-modules:  NotSoSimpleGenericParser
     hs-source-dirs:   src
     build-depends:    base ^>=4.18.2.1
+                    , text
+                    , bytestring
     default-language: Haskell2010

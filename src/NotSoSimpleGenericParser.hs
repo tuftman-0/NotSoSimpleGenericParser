@@ -12,9 +12,9 @@
 module NotSoSimpleGenericParser (
     -- Types
     Parser (..),
-    -- ParserResult (..),
     -- Stream typeclass
     Stream (..),
+    CharStream (..),
     -- Running parsers
     parse,
     -- parseFile,
@@ -37,7 +37,7 @@ module NotSoSimpleGenericParser (
     some,
     modifyError,
     lookAhead,
-    -- Character parsers for String
+    -- Character parsers
     char,
     string,
     spaces,
@@ -117,21 +117,30 @@ class (Eq (Elem s), Show (Elem s), Show s) => Stream s where
     -- Test for prefix
     isPrefixOfS :: s -> s -> Bool
 
-    -- Convert to string for error messages
-
 -- Constraint for Arbitrary Stream s with element type e
 -- (requires ConstraintKinds, TypeOperators)
 type StreamOf e s = (Stream s, Elem s ~ e)
 
+-- *TODO* decide whether we're going to use IsString
+class (Stream s, Elem s ~ Char, IsString s) => CharStream s where
+    fromString :: String -> s
+    toString :: s -> String
+
+    -- fromString = fromList
+    toString s = case uncons s of
+        Nothing -> ""
+        Just (c, rest) -> c : toString rest
+
+
 -- Stream instance for lists of tokens
 instance (Eq a, Show a) => Stream [a] where
     type Elem [a] = a
-    uncons [] = Nothing
-    uncons (x : xs) = Just (x, xs)
-    lengthS = length
-    takeS = take
-    dropS = drop
-    splitAtS = splitAt
+    uncons []     = Nothing
+    uncons (x:xs) = Just (x, xs)
+    lengthS     = List.length
+    takeS       = List.take
+    dropS       = List.drop
+    splitAtS    = List.splitAt
     isPrefixOfS = List.isPrefixOf
 
 -- Stream instance for Text
@@ -144,6 +153,10 @@ instance Stream Text where
     splitAtS    = T.splitAt
     isPrefixOfS = T.isPrefixOf
 
+instance CharStream Text where
+    fromString = T.pack
+    toString   = T.unpack
+
 -- Stream instance for ByteString
 instance Stream ByteString where
     type Elem ByteString = Char
@@ -153,6 +166,10 @@ instance Stream ByteString where
     dropS       = BSC.drop
     splitAtS    = BSC.splitAt
     isPrefixOfS = BSC.isPrefixOf
+
+instance CharStream ByteString where
+    fromString = BSC.pack
+    toString   = BSC.unpack
 
 instance Functor (Parser s) where
     fmap :: (a -> b) -> Parser s a -> Parser s b
@@ -266,7 +283,7 @@ tokens' :: (Stream s, Traversable t) => t (Elem s) -> Parser s (t (Elem s))
 tokens' = traverse token
 
 tokens'' :: (Stream s, Traversable t, Show (t (Elem s))) => t (Elem s) -> Parser s (t (Elem s))
-tokens'' ts = traverse token ts `modifyError` \msg -> "in tokens (" ++ show ts ++ "): " ++ msg
+tokens'' ts = traverse token ts `modifyError` \msg -> "in tokens " ++ show ts ++ ": found" ++ msg
 
 -- Parse one of the tokens in the list
 -- oneOf :: (Stream s) => [Elem s] -> Parser s (Elem s)
@@ -320,7 +337,7 @@ wCapture p = do
     let replay = tokens consumed *> pure result
     return (result, replay)
 
-surrounding :: (StreamOf Char s) => Parser s String
+surrounding :: (CharStream s) => Parser s String
 surrounding = do
     (r, cap) <- wCapture $ oneOf ("\"'`" :: String)
     inside <- many $ notToken r
@@ -382,7 +399,7 @@ matchPairsFun openP closeP = do
     _ <- closeP
     return consumed
     where go = endOfInput `wError` "matchPairsFun: unmatched delimiters" >> fail ""
-           <|> (openP  *> go *> closeP *> go)
+           <|> (openP *> go *> closeP *> go)
            <|> (lookAhead closeP *> pure ())
            <|> (anyToken *> go)
 
@@ -403,29 +420,29 @@ sepBy1 p sep = do
 
 -- Character-specific parsers (for Char streams)
 -- char :: Char -> Parser String Char
-char :: (StreamOf Char s) => Char -> Parser s Char
+char :: (CharStream s) => Char -> Parser s Char
 char = token
 
 -- string :: String -> Parser String String
-string :: (StreamOf Char s) => s -> Parser s s
+string :: (CharStream s) => s -> Parser s s
 string = tokens
 
 -- spaces :: Parser String String
-spaces :: (StreamOf Char s) => Parser s String
+spaces :: (CharStream s) => Parser s String
 spaces = many (char ' ')
 
 -- whitespace :: Parser String String
-whitespace :: (StreamOf Char s) => Parser s String
+whitespace :: (CharStream s) => Parser s String
 whitespace = many (satisfy isSpace "whitespace")
 
 -- digit :: Parser String Char
-digit :: (StreamOf Char s) => Parser s Char
+digit :: (CharStream s) => Parser s Char
 digit = satisfy isDigit "digit"
 
 -- letter :: Parser String Char
-letter :: (StreamOf Char s) => Parser s Char
+letter :: (CharStream s) => Parser s Char
 letter = satisfy isAlpha "letter"
 
 -- alphaNum :: Parser String Char
-alphaNum :: (StreamOf Char s) => Parser s Char
+alphaNum :: (CharStream s) => Parser s Char
 alphaNum = satisfy isAlphaNum "alphanumeric character"

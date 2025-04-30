@@ -227,7 +227,6 @@ instance Monad (Parser s) where
 instance MonadFail (Parser s) where
     fail msg = Parser $ \input -> Failure (msg, input)
 
--- slightly annoying Stream conditions because we use lengthS to improve errors
 instance Alternative (Parser s) where
     empty = Parser $ \input ->
         Failure ("Empty parser", input)
@@ -280,7 +279,7 @@ anyToken = Parser $ \st ->
 endOfInput :: (Stream s) => Parser s ()
 endOfInput = peekNot anyToken `wError` "Expected end of input"
 
--- Match a token that satisfies a predicate
+-- Match a token that satisfies a predicate, also takes a string representing what was expected
 satisfy :: (Stream s) => (Elem s -> Bool) -> String -> Parser s (Elem s)
 satisfy pred expected = try $ do
     t <- anyToken `modifyError` \msg -> msg ++ ", Expected " ++ expected
@@ -325,12 +324,6 @@ oneOf ts = satisfy (`elem` ts) ("one of " ++ show ts)
 noneOf :: (Stream s, Foldable t, Show (t (Elem s))) => t (Elem s) -> Parser s (Elem s)
 noneOf ts = satisfy (`notElem` ts) ("none of " ++ show ts)
 
--- tries a parser but on failure doesn't consume input
-try :: Parser s a -> Parser s a
-try p = Parser $ \st ->
-    case runParser p st of
-        Failure (err, _) -> Failure (err, st)
-        success -> success
 
 concatParsers :: (Foldable t, Monoid a) => t (Parser s a) -> Parser s a
 concatParsers = foldr (liftA2 mappend) (pure mempty)
@@ -345,6 +338,13 @@ choice :: [Parser s a] -> Parser s a
 choice = asum
 -- choice = foldr (<|>) empty
 
+-- tries a parser but on failure doesn't consume input
+try :: Parser s a -> Parser s a
+try p = Parser $ \st ->
+    case runParser p st of
+        Failure (err, _) -> Failure (err, st)
+        success -> success
+        
 -- tries a parser but doesn't consume input *TODO* maybe rename to peek
 lookAhead :: Parser s a -> Parser s a
 lookAhead p = Parser $ \st ->
@@ -393,6 +393,7 @@ wCapture p = do
     return (result, replay)
 
 
+-- *TODO* fix
 -- gets stream contained within a pair of matching open/close patterns
 matchPairs :: Stream s => Parser s a -> Parser s b -> Parser s s
 matchPairs openP closeP = do
@@ -400,12 +401,14 @@ matchPairs openP closeP = do
     return consumed
     where
         go 0 = pure ()
-        go n = endOfInput `wError` ("matchPairs: " ++ show n ++ " unmatched delimiters") >> fail ""
-            <|> (openP  *> go (n+1))
+        go n =
+          -- endOfInput `wError` ("matchPairs: " ++ show n ++ " unmatched delimiters")
+            (openP  *> go (n+1))
             <|> (closeP *> go (n-1))
             <|> (anyToken *> go n)
 
 
+-- *TODO* fix
 -- gets stream contained within a pair of matching open/close patterns
 matchPairsFun :: Stream s => Parser s a -> Parser s b -> Parser s s
 matchPairsFun openP closeP = do

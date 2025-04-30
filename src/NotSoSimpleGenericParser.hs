@@ -12,20 +12,28 @@
 module NotSoSimpleGenericParser (
     -- Types
     Parser (..),
-    -- Stream typeclass
+    ParserState (..),
+    ParseError,
+    
+    -- Stream typeclasses
     Stream (..),
     CharStream (..),
+    
     -- Running parsers
     parse,
-    -- parseFile,
+    
     -- Basic parsers
     anyToken,
     satisfy,
     token,
     notToken,
     tokens,
+    tokens',
+    tokens'',
     oneOf,
     noneOf,
+    endOfInput,
+    
     -- Combinators
     try,
     optional,
@@ -36,7 +44,16 @@ module NotSoSimpleGenericParser (
     many,
     some,
     modifyError,
+    wError,
     lookAhead,
+    peekNot,
+    wConsumed,
+    wCapture,
+    revive,
+    concatParsers,
+    matchPairs,
+    matchPairsFun,
+    
     -- Character parsers
     char,
     string,
@@ -45,6 +62,11 @@ module NotSoSimpleGenericParser (
     digit,
     letter,
     alphaNum,
+    
+    -- Pattern synonyms
+    -- Success,
+    -- Failure,
+    
     -- Type aliases
     StreamOf,
 ) where
@@ -142,6 +164,10 @@ instance (Eq a, Show a) => Stream [a] where
     dropS       = List.drop
     splitAtS    = List.splitAt
     isPrefixOfS = List.isPrefixOf
+
+instance CharStream String where
+    fromString = id
+    toString   = id
 
 -- Stream instance for Text
 instance Stream Text where
@@ -250,6 +276,10 @@ anyToken = Parser $ \st ->
         Just (t, rest) -> Success (t, st')
           where st' = st {input = rest, pos = pos st + 1 }
 
+-- parses if input is empty
+endOfInput :: (Stream s) => Parser s ()
+endOfInput = peekNot anyToken `wError` "Expected end of input"
+
 -- Match a token that satisfies a predicate
 satisfy :: (Stream s) => (Elem s -> Bool) -> String -> Parser s (Elem s)
 satisfy pred expected = try $ do
@@ -302,7 +332,20 @@ try p = Parser $ \st ->
         Failure (err, _) -> Failure (err, st)
         success -> success
 
--- tries a parser but on success doesn't consume input
+concatParsers :: (Foldable t, Monoid a) => t (Parser s a) -> Parser s a
+concatParsers = foldr (liftA2 mappend) (pure mempty)
+-- concatParsers = foldr (\x y -> (<>) <$> x <*> y) (pure mempty)
+
+-- Parse optional value
+optional :: Parser s a -> Parser s (Maybe a)
+optional p = (Just <$> p) <|> pure Nothing
+
+-- Parse one of a list of parsers
+choice :: [Parser s a] -> Parser s a
+choice = asum
+-- choice = foldr (<|>) empty
+
+-- tries a parser but doesn't consume input *TODO* maybe rename to peek
 lookAhead :: Parser s a -> Parser s a
 lookAhead p = Parser $ \st ->
     case runParser p st of
@@ -310,6 +353,18 @@ lookAhead p = Parser $ \st ->
         Failure (e, _) -> Failure (e, st)
         -- failure -> failure
 
+-- Succeeds if parser fails, doesn't consume input (negative lookAhead)
+peekNot :: Parser s a -> Parser s ()
+peekNot p = Parser $ \st ->
+    case runParser p st of
+        Success _ -> Failure ("peekNot: parser matched", st)
+        Failure _ -> Success ((), st)
+
+revive :: Parser s a -> a -> Parser s a
+revive p defaultVal = Parser $ \st ->
+    case runParser p st of
+        Failure (_, st') -> Success (defaultVal, st)
+        success -> success
 
 -- modifies the error of a parser on failure using a function
 modifyError :: Parser s a -> (ParseError -> ParseError) -> Parser s a
@@ -337,46 +392,6 @@ wCapture p = do
     let replay = tokens consumed *> pure result
     return (result, replay)
 
-surrounding :: (CharStream s) => Parser s String
-surrounding = do
-    (r, cap) <- wCapture $ oneOf ("\"'`" :: String)
-    inside <- many $ notToken r
-    _ <- cap
-    return inside
-
-
-
-concatParsers :: (Foldable t, Monoid a) => t (Parser s a) -> Parser s a
-concatParsers = foldr (liftA2 mappend) (pure mempty)
--- concatParsers = foldr (\x y -> (<>) <$> x <*> y) (pure mempty)
-
--- Parse optional value
-optional :: Parser s a -> Parser s (Maybe a)
-optional p = (Just <$> p) <|> pure Nothing
-
--- Parse one of a list of parsers
-choice :: [Parser s a] -> Parser s a
-choice = asum
--- choice = foldr (<|>) empty
-
-
--- Succeeds if parser fails, doesn't consume input (negative lookAhead)
-notP :: Parser s a -> Parser s ()
-notP p = Parser $ \st ->
-    case runParser p st of
-        Success _ -> Failure ("notP: parser matched", st)
-        Failure _ -> Success ((), st)
-
-revive :: Parser s a -> a -> Parser s a
-revive p defaultVal = Parser $ \st ->
-    case runParser p st of
-        Failure (_, st') -> Success (defaultVal, st)
-        success -> success
-
-
--- parses if input is empty
-endOfInput :: (Stream s) => Parser s ()
-endOfInput = notP anyToken `wError` "Expected end of input"
 
 -- gets stream contained within a pair of matching open/close patterns
 matchPairs :: Stream s => Parser s a -> Parser s b -> Parser s s

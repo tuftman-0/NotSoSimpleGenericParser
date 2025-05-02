@@ -14,14 +14,14 @@ module NotSoSimpleGenericParser (
     Parser (..),
     ParserState (..),
     ParseError,
-    
+
     -- Stream typeclasses
     Stream (..),
     CharStream (..),
-    
+
     -- Running parsers
     parse,
-    
+
     -- Basic parsers
     anyToken,
     satisfy,
@@ -33,7 +33,7 @@ module NotSoSimpleGenericParser (
     oneOf,
     noneOf,
     endOfInput,
-    
+
     -- Combinators
     try,
     optional,
@@ -53,7 +53,7 @@ module NotSoSimpleGenericParser (
     concatParsers,
     matchPairs,
     matchPairsFun,
-    
+
     -- Character parsers
     char,
     string,
@@ -62,11 +62,11 @@ module NotSoSimpleGenericParser (
     digit,
     letter,
     alphaNum,
-    
+
     -- Pattern synonyms
     -- Success,
     -- Failure,
-    
+
     -- Type aliases
     StreamOf,
 ) where
@@ -344,7 +344,7 @@ try p = Parser $ \st ->
     case runParser p st of
         Failure (err, _) -> Failure (err, st)
         success -> success
-        
+
 -- tries a parser but doesn't consume input *TODO* maybe rename to peek
 lookAhead :: Parser s a -> Parser s a
 lookAhead p = Parser $ \st ->
@@ -377,6 +377,8 @@ modifyError parser modify = Parser $ \input ->
 wError :: Parser s a -> ParseError -> Parser s a
 wError p error = p `modifyError` const error
 
+forceFail p msg = p `wError` msg *> fail msg
+
 -- takes a parser and gives you the
 wConsumed :: (Stream s) => Parser s a -> Parser s (a, s)
 wConsumed p = Parser $ \st ->
@@ -402,10 +404,26 @@ matchPairs openP closeP = do
     where
         go 0 = pure ()
         go n =
-          -- endOfInput `wError` ("matchPairs: " ++ show n ++ " unmatched delimiters")
-            (openP  *> go (n+1))
+            (openP *> go (n+1))
             <|> (closeP *> go (n-1))
+            <|> (endOfInput `forceFail` ("matchPairs: " ++ show n ++ " unmatched delimiters"))
             <|> (anyToken *> go n)
+
+
+-- *TODO* fix
+-- gets stream contained within a pair of matching open/close patterns
+matchInPairs :: Stream s => Parser s a -> Parser s b -> Parser s s
+matchInPairs openP closeP = do
+    (_, consumed) <- wConsumed (openP *> go 1)
+    return consumed
+    where
+        go 0 = pure ""
+        go n = do
+            inside <- openP *> go (n+1)
+                  <|> (closeP *> go (n-1))
+                  <|> (anyToken *> pure "")
+            rest <- go n
+            return $ inside ++ rest
 
 
 -- *TODO* fix

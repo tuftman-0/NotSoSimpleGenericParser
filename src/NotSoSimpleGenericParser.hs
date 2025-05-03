@@ -342,6 +342,52 @@ optional p = (Just <$> p) <|> pure Nothing
 choice :: [Parser s a] -> Parser s a
 choice = asum
 
+-- exactly n repetitions of p
+count :: Int -> Parser s a -> Parser s [a]
+count 0 _ = pure []
+count n p = (:) <$> p <*> count (n-1) p
+
+bounded' :: Int -> Int -> Parser s a -> Parser s [a]
+bounded' lo hi p = choice [ count n p | n <- [hi, hi-1 .. lo] ]
+
+-- Grab the current state
+getState :: Parser s (ParserState s)
+getState = Parser $ \st -> Success (st, st)
+
+-- Unconditionally restore a saved state
+putState :: Parser s () -> ParserState s -> Parser s ()
+putState _ st' = Parser $ \_ -> Success ((), st')
+
+
+-- collectUpTo n p = do
+--     st0 <- getState
+
+-- boundedThen :: Int -> Int -> Parser s a -> Parser s b -> Parser s ([a], b)
+-- boundedThen lo hi p suffix = trySuffix desc where
+--     collect 0 st acc rems = (reverse acc, (0, st) : rems)
+--     collect n st acc rems =
+--         case runParser p st of
+--             Success (a, st') ->
+--                 collect (n-1) st'
+--                         (a:acc)
+--                         ((hi - n, st) : rems)
+--             Failure _ -> (reverse acc, (hi - n, st) : rems)
+
+--     trySuffix
+
+
+-- atLeast :: Int -> Parser s a -> Parser s [a]
+-- atLeast n p = do
+--     first <- count n p
+--     rest <- many p
+--     return $ first ++ rest
+
+atLeast :: Int -> Parser s a -> Parser s [a]
+atLeast n p = (++) <$> count n p <*> many p
+
+search :: Stream s => Parser s a -> Parser s a
+search p = p <|> (anyToken *> search p)
+
 -- tries a parser but on failure doesn't consume input
 try :: Parser s a -> Parser s a
 try p = Parser $ \st ->
@@ -364,8 +410,16 @@ peekNot p = Parser $ \st ->
         Success _ -> Failure ("peekNot: parser matched", st)
         Failure _ -> Success ((), st)
 
-revive :: Parser s a -> a -> Parser s a
-revive p defaultVal = Parser $ \st ->
+
+-- negates success and failure retaining consumption behaviour
+negateP :: Parser s a -> Parser s ()
+negateP p = Parser $ \st ->
+    case runParser p st of
+        Success (_, st') -> Failure ("notP: parser matched", st')
+        Failure (_, st') -> Success ((), st')
+
+revive :: a -> Parser s a -> Parser s a
+revive defaultVal p = Parser $ \st ->
     case runParser p st of
         Failure (_, st') -> Success (defaultVal, st)
         success -> success

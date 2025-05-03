@@ -381,9 +381,10 @@ modifyError parser modify = Parser $ \input ->
 wError :: Parser s a -> ParseError -> Parser s a
 wError p error = p `modifyError` const error
 
+forceFail :: Parser s a -> ParseError -> Parser s b
 forceFail p msg = p `wError` msg *> fail msg
 
--- takes a parser and gives you the
+-- takes a parser and gives you the result and the amount consumed
 wConsumed :: (Stream s) => Parser s a -> Parser s (a, s)
 wConsumed p = Parser $ \st ->
     case runParser p st of

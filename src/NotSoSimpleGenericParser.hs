@@ -338,10 +338,9 @@ concatParsers = foldr (liftA2 mappend) (pure mempty)
 optional :: Parser s a -> Parser s (Maybe a)
 optional p = (Just <$> p) <|> pure Nothing
 
--- Parse one of a list of parsers
+-- Parse one of a list of parsers (same as `choice = foldr (<|>) empty`)
 choice :: [Parser s a] -> Parser s a
 choice = asum
--- choice = foldr (<|>) empty
 
 -- tries a parser but on failure doesn't consume input
 try :: Parser s a -> Parser s a

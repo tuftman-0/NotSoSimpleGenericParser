@@ -203,18 +203,18 @@ instance CharStream ByteString where
 
 instance Functor (Parser s) where
     fmap :: (a -> b) -> Parser s a -> Parser s b
-    fmap f parser = Parser $ \input ->
-        case runParser parser input of
+    fmap f parser = Parser $ \st ->
+        case runParser parser st of
             Success (v, rest) -> Success (f v, rest)
             Failure err -> Failure err
 
 instance Applicative (Parser s) where
     pure :: a -> Parser s a
-    pure x = Parser $ \input -> Success (x, input)
+    pure x = Parser $ \st -> Success (x, st)
 
     (<*>) :: Parser s (a -> b) -> Parser s a -> Parser s b
-    pf <*> px = Parser $ \input ->
-        case runParser pf input of
+    pf <*> px = Parser $ \st ->
+        case runParser pf st of
             Failure err -> Failure err
             Success (f, rest) ->
                 case runParser px rest of
@@ -223,23 +223,24 @@ instance Applicative (Parser s) where
 
 instance Monad (Parser s) where
     (>>=) :: Parser s a -> (a -> Parser s b) -> Parser s b
-    parser >>= f = Parser $ \input ->
-        case runParser parser input of
+    parser >>= f = Parser $ \st ->
+        case runParser parser st of
             Failure err -> Failure err
             Success (v, rest) -> runParser (f v) rest
 
 instance MonadFail (Parser s) where
-    fail msg = Parser $ \input -> Failure (msg, input)
+    fail :: String -> Parser s a
+    fail msg = Parser $ \st -> Failure (msg, st)
 
 instance Alternative (Parser s) where
-    empty = Parser $ \input ->
-        Failure ("Empty parser", input)
+    empty = Parser $ \st ->
+        Failure ("Empty parser", st)
 
     (<|>) :: Parser s a -> Parser s a -> Parser s a
     p1 <|> p2 = Parser $ \st ->
         case runParser p1 st of
             Success result -> Success result
-            -- if first parser fails try the second one on original input
+            -- if first parser fails try the second one on the original state
             Failure (err1, st1) ->
                 case runParser p2 st of
                     Success result -> Success result

@@ -129,6 +129,7 @@ class (Eq (Elem s), Show (Elem s), Show s) => Stream s where
     type Elem s :: Type
     -- Get the next item and the rest
     uncons :: s -> Maybe (Elem s, s)
+    emptyS :: s
 
     -- For efficiency
     lengthS :: s -> Int
@@ -159,6 +160,7 @@ instance (Eq a, Show a) => Stream [a] where
     type Elem [a] = a
     uncons []     = Nothing
     uncons (x:xs) = Just (x, xs)
+    emptyS      = []
     lengthS     = List.length
     takeS       = List.take
     dropS       = List.drop
@@ -173,6 +175,7 @@ instance CharStream String where
 instance Stream Text where
     type Elem Text = Char
     uncons      = T.uncons
+    emptyS      = T.empty
     lengthS     = T.length
     takeS       = T.take
     dropS       = T.drop
@@ -187,6 +190,7 @@ instance CharStream Text where
 instance Stream ByteString where
     type Elem ByteString = Char
     uncons      = BSC.uncons
+    emptyS      = BSC.empty
     lengthS     = BSC.length
     takeS       = BSC.take
     dropS       = BSC.drop

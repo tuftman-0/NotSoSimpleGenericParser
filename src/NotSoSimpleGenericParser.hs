@@ -391,6 +391,10 @@ wConsumed p = Parser $ \st ->
             where consumed = takeS (pos st' - pos st) (input st)
         Failure (err, st') -> Failure (err, st')
 
+
+getConsumed :: Stream s => Parser s a -> Parser s s
+getConsumed = (snd <$>) . wConsumed
+
 -- run a parser
 wCapture :: (Stream s) => Parser s a -> Parser s (a, Parser s a)
 wCapture p = do
@@ -399,49 +403,49 @@ wCapture p = do
     return (result, replay)
 
 
--- *TODO* fix
--- gets stream contained within a pair of matching open/close patterns
-matchPairs :: Stream s => Parser s a -> Parser s b -> Parser s s
-matchPairs openP closeP = do
-    (_, consumed) <- wConsumed (openP *> go 1)
-    return consumed
-    where
-        go 0 = pure ()
-        go n =
-            (openP *> go (n+1))
-            <|> (closeP *> go (n-1))
-            <|> (endOfInput `forceFail` ("matchPairs: " ++ show n ++ " unmatched delimiters"))
-            <|> (anyToken *> go n)
+-- match :: (Stream s) => Elem s -> Elem s -> Int -> Parser s s
+-- match op cl = go
+--   where
+--     go 0 = pure emptyS
+--     go n = do
+--         t <- anyToken `modifyError` (\msg -> "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters")
+--         case t of
+--             _ | t == op   -> go (n + 1)
+--               | t == cl   -> go (n - 1)
+--               | otherwise -> go n
+
+matchPairs :: (Stream s) => Elem s -> Elem s -> Parser s s
+matchPairs open close = getConsumed (token open *> go 1)
+  where
+    go 0 = pure ()
+    go n = do
+        t <- anyToken `modifyError` (\msg -> "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters")
+        case t of
+            _ | t == open  -> go (n + 1)
+              | t == close -> go (n - 1)
+              | otherwise  -> go n
 
 
--- *TODO* fix
--- gets stream contained within a pair of matching open/close patterns
-matchInPairs :: Stream s => Parser s a -> Parser s b -> Parser s s
-matchInPairs openP closeP = do
-    (_, consumed) <- wConsumed (openP *> go 1)
-    return consumed
-    where
-        go 0 = pure ""
-        go n = do
-            inside <- openP *> go (n+1)
-                  <|> (closeP *> go (n-1))
-                  <|> (anyToken *> pure "")
-            rest <- go n
-            return $ inside ++ rest
+matchPairsP :: Stream s => Parser s a -> Parser s b -> Parser s s
+matchPairsP openP closeP = getConsumed (openP *> inner 1)
+  where
+    errf n msg = "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters"
+    inner 0 = return () -- Base case: if n == 0, we've matched the opening and closing delimiters
+    inner n = (openP *> inner (n + 1)) -- Recurse for open delimiters
+          <|> (closeP *> inner (n - 1)) -- Recurse for close delimiters
+          <|> (anyToken `modifyError` errf n *> inner n)
 
 
 -- *TODO* fix
 -- gets stream contained within a pair of matching open/close patterns
 matchPairsFun :: Stream s => Parser s a -> Parser s b -> Parser s s
-matchPairsFun openP closeP = do
-    _ <- openP
-    (_, consumed) <- wConsumed go
-    _ <- closeP
-    return consumed
-    where go = endOfInput `wError` "matchPairsFun: unmatched delimiters" >> fail ""
-           <|> (openP *> go *> closeP *> go)
-           <|> (lookAhead closeP *> pure ())
-           <|> (anyToken *> go)
+matchPairsFun openP closeP = getConsumed $ openP *> go <* closeP
+  where
+    go = choice
+            [ openP *> go *> closeP *> go
+            , lookAhead closeP *> pure ()
+            , anyToken *> go
+            ]
 
 -- Parse something between delimiters
 between :: Parser s open -> Parser s close -> Parser s a -> Parser s a

@@ -8,6 +8,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use $>" #-}
+{-# LANGUAGE ExistentialQuantification #-}
 
 module NotSoSimpleGenericParser (
     -- Types
@@ -37,6 +38,7 @@ module NotSoSimpleGenericParser (
     -- Combinators
     try,
     optional,
+    ifP,
     choice,
     between,
     sepBy,
@@ -44,6 +46,7 @@ module NotSoSimpleGenericParser (
     many,
     some,
     modifyError,
+    wErrorMod,
     wError,
     lookAhead,
     peekNot,
@@ -52,7 +55,7 @@ module NotSoSimpleGenericParser (
     revive,
     concatParsers,
     matchPairs,
-    matchPairsFun,
+    -- matchPairsFun,
 
     -- Character parsers
     char,
@@ -96,6 +99,7 @@ pattern Failure err = Left err
 data ParserState s = ParserState
   { input :: s         -- The remaining input stream
   , pos   :: Int       -- The current position in the input
+  -- , isCut :: Bool
   } deriving (Show, Eq)
 
 
@@ -110,13 +114,21 @@ so a (Parser String Int) would be a parser that parses a string and gives an Int
 I've added position tracking to the parser state but originally the parser type looked like this:
 newtype Parser s a = Parser {runParser :: s -> Either (ParseError, s) (a, s)}
 -}
-newtype Parser s a = Parser {runParser :: ParserState s -> Either (ParseError, ParserState s) (a, ParserState s)}
+
+newtype Parser s a = Parser
+    { runParser ::
+        ParserState s ->
+        Either
+            (ParseError, ParserState s)
+            (a, ParserState s)
+    }
 
 instance Show (Parser s a) where
     show _ = "<Parser>"
 
 parse :: Parser s a -> s -> Either (ParseError, ParserState s) (a, ParserState s)
 parse p s = runParser p (mkInitialState s)
+
 -- parse :: Parser s a -> s -> Either (ParseError, s) (a, s)
 -- parse p s =
 --     case runParser p (mkInitialState s) of
@@ -130,6 +142,8 @@ class (Eq (Elem s), Show (Elem s), Show s) => Stream s where
     -- Get the next item and the rest
     uncons :: s -> Maybe (Elem s, s)
     emptyS :: s
+    -- check if is empty maybe
+    -- nullS :: s -> Bool
 
     -- For efficiency
     lengthS :: s -> Int
@@ -251,6 +265,40 @@ instance Alternative (Parser s) where
                             EQ -> Failure (err1 ++ " or " ++ err2, st1)
                             LT -> Failure (err2, st2)
 
+-- Conditional branch parsing
+-----------------------------
+-- tries a parser, if it's successful return parser thenP otherwise return parser elseP
+ifP :: Parser s a -> Parser s b -> Parser s b -> Parser s b
+ifP condP thenP elseP = do
+    result <- optional condP
+    case result of
+        Just _  -> thenP
+        Nothing -> elseP
+
+-- *TODO* do something like ultra debug mode or something
+ifPdebug :: Parser s a -> Parser s b -> Parser s b -> Parser s b
+ifPdebug p thenP elseP = do
+    result <- optional p
+    case result of
+        Just _  -> thenP `wErrorMod` ("ifP (then):" ++)
+        Nothing -> elseP `wErrorMod` ("ifP (else):" ++)
+
+-- construct for chaining parser ifP: Cond (p1) (p2) is like if (p1) succeeds then parser (p2)
+data Branch s a
+    = forall c.
+        Cond (Parser s c) (Parser s a)
+    | Otherwise (Parser s a)
+
+-- basically like haskell's guards except we have predicate cond parsers and action parsers
+branches :: [Branch s a] -> Parser s a
+branches [] = empty
+branches (Cond cond action : rest) = do
+    result <- optional cond
+    case result of
+        Just _  -> action
+        Nothing -> branches rest
+branches (Otherwise action : _) = action
+
 
 instance Monoid a => Semigroup (Parser s a) where
     p1 <> p2 = liftA2 mappend p1 p2
@@ -259,18 +307,17 @@ instance Monoid a => Monoid (Parser s a) where
     mempty = pure mempty
     mappend = (<>)
 
+
+-- funny stupid function that converts a stream to a list of elements in a very overcomplicated way
 toTokens :: Stream s => s -> [Elem s]
 toTokens stream = case runParser (many anyToken) (mkInitialState stream) of
     Success (result, _) -> result
     _ -> []
 
-newtype Committed s a = Committed {unCommitted :: Parser s a}
-newtype Cut s a = Cut {unCut :: Parser s a}
-
-try' :: Either (Committed s a) (Parser s a) -> Parser s a
-try' (Right p) = try p  -- The usual backtracking try.
-try' (Left (Committed p)) = p  -- Strip the commit wrapper and don’t reset on failure.
-
+-- toTokens' :: Stream s => s -> [Elem s]
+-- toTokens' s = case uncons s of
+--     Just (x, rest) -> x : toTokens' rest
+--     _ -> []
 
 -- Get any token
 anyToken :: (Stream s) => Parser s (Elem s)
@@ -287,7 +334,7 @@ endOfInput = peekNot anyToken `wError` "Expected end of input"
 -- Match a token that satisfies a predicate, also takes a string representing what was expected
 satisfy :: (Stream s) => (Elem s -> Bool) -> String -> Parser s (Elem s)
 satisfy pred expected = try $ do
-    t <- anyToken `modifyError` \msg -> msg ++ ", Expected " ++ expected
+    t <- anyToken `wErrorMod` \msg -> msg ++ ", Expected " ++ expected
     if pred t
         then return t
         else fail $ "Expected " ++ expected ++ ", found " ++ show t
@@ -317,7 +364,7 @@ tokens' :: (Stream s, Traversable t) => t (Elem s) -> Parser s (t (Elem s))
 tokens' = traverse token
 
 tokens'' :: (Stream s, Traversable t, Show (t (Elem s))) => t (Elem s) -> Parser s (t (Elem s))
-tokens'' ts = traverse token ts `modifyError` \msg -> "in tokens " ++ show ts ++ ": found" ++ msg
+tokens'' ts = traverse token ts `wErrorMod` \msg -> "in tokens " ++ show ts ++ ": found" ++ msg
 
 -- Parse one of the tokens in the list
 -- oneOf :: (Stream s) => [Elem s] -> Parser s (Elem s)
@@ -385,8 +432,12 @@ putState _ st' = Parser $ \_ -> Success ((), st')
 atLeast :: Int -> Parser s a -> Parser s [a]
 atLeast n p = (++) <$> count n p <*> many p
 
+
 search :: Stream s => Parser s a -> Parser s a
 search p = p <|> (anyToken *> search p)
+
+manyTill :: Parser s a -> Parser s end -> Parser s [a]
+manyTill p end = (end *> pure []) <|> ((:) <$> p <*> manyTill p end)
 
 -- tries a parser but on failure doesn't consume input
 try :: Parser s a -> Parser s a
@@ -424,16 +475,28 @@ revive defaultVal p = Parser $ \st ->
         Failure (_, st') -> Success (defaultVal, st)
         success -> success
 
+
+
+
 -- modifies the error of a parser on failure using a function
-modifyError :: Parser s a -> (ParseError -> ParseError) -> Parser s a
-modifyError parser modify = Parser $ \input ->
-    case runParser parser input of
+modifyError :: (ParseError -> ParseError) -> Parser s a -> Parser s a
+modifyError modify p = Parser $ \input ->
+    case runParser p input of
         Failure (msg, remaining) -> Failure (modify msg, remaining)
         success -> success
 
+
+setError :: ParseError -> Parser s a -> Parser s a
+setError = modifyError . const
+
+
+wErrorMod :: Parser s a -> (ParseError -> ParseError) -> Parser s a
+wErrorMod = flip modifyError
+
 -- replaces the error of a parser
 wError :: Parser s a -> ParseError -> Parser s a
-wError p error = p `modifyError` const error
+-- wError p error = p `wErrorMod` const error
+wError = flip setError
 
 forceFail :: Parser s a -> ParseError -> Parser s b
 forceFail p msg = p `wError` msg *> fail msg
@@ -447,6 +510,7 @@ wConsumed p = Parser $ \st ->
         Failure (err, st') -> Failure (err, st')
 
 
+-- takes a parser gives a parser whose result is what the first consumes
 getConsumed :: Stream s => Parser s a -> Parser s s
 getConsumed = (snd <$>) . wConsumed
 
@@ -458,49 +522,46 @@ wCapture p = do
     return (result, replay)
 
 
--- match :: (Stream s) => Elem s -> Elem s -> Int -> Parser s s
--- match op cl = go
---   where
---     go 0 = pure emptyS
---     go n = do
---         t <- anyToken `modifyError` (\msg -> "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters")
---         case t of
---             _ | t == op   -> go (n + 1)
---               | t == cl   -> go (n - 1)
---               | otherwise -> go n
-
 matchPairs :: (Stream s) => Elem s -> Elem s -> Parser s s
 matchPairs open close = getConsumed (token open *> go 1)
   where
     go 0 = pure ()
     go n = do
-        t <- anyToken `modifyError` (\msg -> "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters")
+        t <- anyToken `wErrorMod` (\msg -> "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters")
         case t of
             _ | t == open  -> go (n + 1)
               | t == close -> go (n - 1)
               | otherwise  -> go n
 
 
-matchPairsP :: Stream s => Parser s a -> Parser s b -> Parser s s
+
+
+matchPairsP :: (Stream s) => Parser s a -> Parser s b -> Parser s s
 matchPairsP openP closeP = getConsumed (openP *> inner 1)
   where
-    errf n msg = "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters"
-    inner 0 = return () -- Base case: if n == 0, we've matched the opening and closing delimiters
-    inner n = (openP *> inner (n + 1)) -- Recurse for open delimiters
-          <|> (closeP *> inner (n - 1)) -- Recurse for close delimiters
-          <|> (anyToken `modifyError` errf n *> inner n)
-
-
--- *TODO* fix
--- gets stream contained within a pair of matching open/close patterns
-matchPairsFun :: Stream s => Parser s a -> Parser s b -> Parser s s
-matchPairsFun openP closeP = getConsumed $ openP *> go <* closeP
-  where
-    go = choice
-            [ openP *> go *> closeP *> go
-            , lookAhead closeP *> pure ()
-            , anyToken *> go
+    errf n msg = "matchPairsP: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters"
+    inner 0 = return ()
+    inner n =
+        branches
+            [ Cond openP (inner (n + 1))
+            , Cond closeP (inner (n - 1))
+            , Otherwise (anyToken `wErrorMod` errf n *> inner n)
             ]
+
+parseInt :: (CharStream s) => Parser s Int
+parseInt = read <$> some digit
+
+-- -- gets stream contained within a pair of matching open/close patterns
+-- matchPairsFun :: Stream s => Parser s a -> Parser s b -> Parser s s
+-- matchPairsFun openP closeP = getConsumed (openP *> go <* closeP) `wErrorMod` \msg -> msg
+--   where
+--     errf msg = "matchPairsFun: " ++ msg ++ ", " ++ "unmatched delimiters"
+--     go =
+--         branches
+--             [ Cond openP (go *> closeP *> go)
+--             , Cond closeP (pure ())
+--             , Otherwise (anyToken `wErrorMod` errf *> go)
+--             ]
 
 -- Parse something between delimiters
 between :: Parser s open -> Parser s close -> Parser s a -> Parser s a

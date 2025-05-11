@@ -89,7 +89,7 @@ type ParseError = String
 pattern Success :: (a, st) -> Either (ParseError, st) (a, st)
 pattern Success result = Right result
 
-pattern Failure :: (String, st) -> Either (ParseError, st) (a, st)
+pattern Failure :: (ParseError, st) -> Either (ParseError, st) (a, st)
 pattern Failure err = Left err
 
 

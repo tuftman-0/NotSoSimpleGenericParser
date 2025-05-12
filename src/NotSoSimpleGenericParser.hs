@@ -600,17 +600,18 @@ matchPairsP openP closeP = getConsumed (openP *> inner 1)
             ]
 
 
--- -- gets stream contained within a pair of matching open/close patterns
--- matchPairsFun :: Stream s => Parser s a -> Parser s b -> Parser s s
--- matchPairsFun openP closeP = getConsumed (openP *> go <* closeP) `wErrorMod` \msg -> msg
---   where
---     errf msg = "matchPairsFun: " ++ msg ++ ", " ++ "unmatched delimiters"
---     go =
---         branches
---             [ Cond openP (go *> closeP *> go)
---             , Cond closeP (pure ())
---             , Otherwise (anyToken `wErrorMod` errf *> go)
---             ]
+-- gets stream contained within a pair of matching open/close patterns
+matchPairsFun :: Stream s => Parser s a -> Parser s b -> Parser s s
+matchPairsFun openP closeP = getConsumed (openP *> go <* closeP)
+  where
+    errf msg = "matchPairsFun: " ++ msg ++ ", " ++ "unmatched delimiters"
+    go =
+        branches
+            [ Cond openP (go *> closeP *> go)
+            , Cond closeP (pure ())
+            , Otherwise (anyToken `wErrorMod` errf *> go)
+            ]
+
 
 -- Parse something between delimiters
 between :: Parser s open -> Parser s close -> Parser s a -> Parser s a

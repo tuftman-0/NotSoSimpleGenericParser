@@ -10,6 +10,7 @@
 {-# HLINT ignore "Use $>" #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE TupleSections #-}
+-- {-# LANGUAGE NoMonomorphismRestriction #-}
 
 module NotSoSimpleGenericParser (
     -- Types
@@ -42,6 +43,7 @@ module NotSoSimpleGenericParser (
     ifP,
     branches,
     choice,
+
     between,
     sepBy,
     sepBy1,

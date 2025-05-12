@@ -77,10 +77,8 @@ module NotSoSimpleGenericParser (
 import Control.Applicative (Alternative (..))
 import Data.Monoid (Monoid, mappend, mempty)
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
-import Data.Foldable (asum, Foldable (toList))
 import Data.Kind (Type)
 import qualified Data.List as List
-import Control.Monad (ap)
 import Data.String (IsString)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BSC
@@ -467,7 +465,7 @@ peekNot p = Parser $ \st ->
 negateP :: Parser s a -> Parser s ()
 negateP p = Parser $ \st ->
     case runParser p st of
-        Success (_, st') -> Failure ("notP: parser matched", st')
+        Success (_, st') -> Failure ("negateP: parser matched", st')
         Failure (_, st') -> Success ((), st')
 
 revive :: a -> Parser s a -> Parser s a
@@ -481,9 +479,9 @@ revive defaultVal p = Parser $ \st ->
 
 -- modifies the error of a parser on failure using a function
 modifyError :: (ParseError -> ParseError) -> Parser s a -> Parser s a
-modifyError modify p = Parser $ \input ->
-    case runParser p input of
-        Failure (msg, remaining) -> Failure (modify msg, remaining)
+modifyError modify p = Parser $ \st ->
+    case runParser p st of
+        Failure (msg, st') -> Failure (modify msg, st')
         success -> success
 
 

@@ -98,7 +98,7 @@ pattern Failure err = Left err
 {-# COMPLETE Success, Failure #-}
 
 data ParserState s = ParserState
-  { input :: s         -- The remaining input stream
+  { inputS :: s         -- The remaining input stream
   , pos   :: Int       -- The current position in the input
   -- , isCut :: Bool
   } deriving (Show, Eq)
@@ -106,7 +106,7 @@ data ParserState s = ParserState
 
 -- Create an initial state from an input stream.
 mkInitialState :: s -> ParserState s
-mkInitialState s = ParserState { input = s, pos = 0 }
+mkInitialState s = ParserState { inputS = s, pos = 0 }
 
 {-
 a (Parser s a) is a parser that operates on an input/stream of type `s` and has result type `a`
@@ -323,10 +323,10 @@ toTokens stream = case runParser (many anyToken) (mkInitialState stream) of
 -- Get any token
 anyToken :: (Stream s) => Parser s (Elem s)
 anyToken = Parser $ \st ->
-    case uncons (input st) of
+    case uncons (inputS st) of
         Nothing -> Failure ("End Of Input", st)
         Just (t, rest) -> Success (t, st')
-          where st' = st {input = rest, pos = pos st + 1 }
+          where st' = st {inputS = rest, pos = pos st + 1 }
 
 -- parses if input is empty
 endOfInput :: (Stream s) => Parser s ()
@@ -351,12 +351,12 @@ notToken t = satisfy (/= t) ("not " ++ show t)
 -- Parse a sequence of tokens
 tokens :: (Stream s) => s -> Parser s s
 tokens ts = Parser $ \st ->
-  let inp = input st
+  let inp = inputS st
       n   = lengthS ts
   in if ts `isPrefixOfS` inp
         then let rest   = dropS n inp
                  newPos = pos st + n
-                 newSt  = st { input = rest, pos = newPos }
+                 newSt  = st { inputS = rest, pos = newPos }
              in Success (ts, newSt)
         else Failure ("Expected " ++ show ts, st)
 
@@ -507,7 +507,7 @@ wConsumed :: (Stream s) => Parser s a -> Parser s (a, s)
 wConsumed p = Parser $ \st ->
     case runParser p st of
         Success (res, st') -> Success ( (res, consumed), st' )
-            where consumed = takeS (pos st' - pos st) (input st)
+            where consumed = takeS (pos st' - pos st) (inputS st)
         Failure (err, st') -> Failure (err, st')
 
 

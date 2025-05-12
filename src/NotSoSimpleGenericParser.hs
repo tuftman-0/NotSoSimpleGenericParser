@@ -93,6 +93,7 @@ module NotSoSimpleGenericParser (
 import Control.Applicative (Alternative (..))
 import Data.Monoid (Monoid, mappend, mempty)
 import Data.Char (isAlpha, isAlphaNum, isDigit, isSpace)
+import Data.Foldable (asum)
 import Data.Kind (Type)
 import qualified Data.List as List
 import Data.String (IsString)

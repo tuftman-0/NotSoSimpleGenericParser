@@ -9,6 +9,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use $>" #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE TupleSections #-}
 
 module NotSoSimpleGenericParser (
     -- Types
@@ -393,52 +394,85 @@ count :: Int -> Parser s a -> Parser s [a]
 count 0 _ = pure []
 count n p = (:) <$> p <*> count (n-1) p
 
-bounded' :: Int -> Int -> Parser s a -> Parser s [a]
-bounded' lo hi p = choice [ count n p | n <- [hi, hi-1 .. lo] ]
-
--- Grab the current state
-getState :: Parser s (ParserState s)
-getState = Parser $ \st -> Success (st, st)
-
--- Unconditionally restore a saved state
-putState :: Parser s () -> ParserState s -> Parser s ()
-putState _ st' = Parser $ \_ -> Success ((), st')
-
-
--- collectUpTo n p = do
---     st0 <- getState
-
--- boundedThen :: Int -> Int -> Parser s a -> Parser s b -> Parser s ([a], b)
--- boundedThen lo hi p suffix = trySuffix desc where
---     collect 0 st acc rems = (reverse acc, (0, st) : rems)
---     collect n st acc rems =
---         case runParser p st of
---             Success (a, st') ->
---                 collect (n-1) st'
---                         (a:acc)
---                         ((hi - n, st) : rems)
---             Failure _ -> (reverse acc, (hi - n, st) : rems)
-
---     trySuffix
-
-
 -- atLeast :: Int -> Parser s a -> Parser s [a]
 -- atLeast n p = do
 --     first <- count n p
 --     rest <- many p
 --     return $ first ++ rest
 
+
 atLeast :: Int -> Parser s a -> Parser s [a]
 atLeast n p = (++) <$> count n p <*> many p
 
 
-search :: Stream s => Parser s a -> Parser s a
-search p = p <|> (anyToken *> search p)
-
 manyTill :: Parser s a -> Parser s end -> Parser s [a]
 manyTill p end = (end *> pure []) <|> ((:) <$> p <*> manyTill p end)
 
--- tries a parser but on failure doesn't consume input
+search :: Stream s => Parser s a -> Parser s a
+search p = p <|> (anyToken *> search p)
+
+-- Grab the current state
+getState :: Parser s (ParserState s)
+getState = Parser $ \st -> Success (st, st)
+
+-- Unconditionally restore a saved state
+putState :: ParserState s -> Parser s ()
+putState st' = Parser $ \_ -> Success ((), st')
+
+
+-- checkpoint :: Parser s a -> Parser s (a, ParserState s)
+-- checkpoint p = do
+--     x <- p
+--     st <- getState
+--     pure (x, st)
+
+checkpoint :: Parser s a -> Parser s (a, ParserState s)
+checkpoint p = (,) <$> p <*> getState
+
+rollback :: ParserState s -> Parser s ()
+rollback = putState
+
+collectUpTo :: Int -> Parser s a -> Parser s [(a, ParserState s)]
+collectUpTo n p = go n []
+  where
+    go 0 acc = pure (reverse acc)
+    go k acc =
+        ( do
+            (x, st) <- checkpoint p
+            go (k - 1) ((x, st) : acc)
+        )
+            <|> pure (reverse acc)
+
+boundedThen :: Int -> Int -> Parser s a -> Parser s b -> Parser s ([a], b)
+boundedThen lo hi p suffix = do
+    st0 <- getState
+    resultsWithStates <- collectUpTo hi p
+
+    let results = map fst resultsWithStates
+        cuts = (0, st0) : zip [1 ..] (map snd resultsWithStates)
+        valid = drop lo cuts
+
+        -- tryAt [] = fail "suffix never matched"
+        -- tryAt ((i,st) : rest) = do
+        --     rollback st
+        --     b <- suffix
+        --     return (take i results, b)
+        --     <|> tryAt rest
+        tryAt [] = fail "suffix never matched"
+        tryAt ((i, st) : rest) =
+            rollback st
+                *> ( (take i results,)
+                        <$> suffix
+                            <|> tryAt rest
+                   )
+    tryAt (reverse valid)
+
+
+bounded :: Int -> Int -> Parser s a -> Parser s [a]
+bounded lo hi p = fst <$> boundedThen lo hi p (pure ())
+
+
+-- tries a parser but on failure doesn't consume input (mostly used for manipulating errors and stuff)
 try :: Parser s a -> Parser s a
 try p = Parser $ \st ->
     case runParser p st of
@@ -471,7 +505,7 @@ negateP p = Parser $ \st ->
 revive :: a -> Parser s a -> Parser s a
 revive defaultVal p = Parser $ \st ->
     case runParser p st of
-        Failure (_, st') -> Success (defaultVal, st)
+        Failure _ -> Success (defaultVal, st)
         success -> success
 
 

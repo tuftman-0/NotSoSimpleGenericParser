@@ -67,8 +67,8 @@ module NotSoSimpleGenericParser (
     alphaNum,
 
     -- Pattern synonyms
-    -- Success,
-    -- Failure,
+    pattern Success,
+    pattern Failure,
 
     -- Type aliases
     StreamOf,
@@ -95,6 +95,7 @@ pattern Success result = Right result
 pattern Failure :: (ParseError, st) -> Either (ParseError, st) (a, st)
 pattern Failure err = Left err
 
+{-# COMPLETE Success, Failure #-}
 
 data ParserState s = ParserState
   { input :: s         -- The remaining input stream

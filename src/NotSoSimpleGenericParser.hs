@@ -599,8 +599,6 @@ matchPairsP openP closeP = getConsumed (openP *> inner 1)
             , Otherwise (anyToken `wErrorMod` errf n *> inner n)
             ]
 
-parseInt :: (CharStream s) => Parser s Int
-parseInt = read <$> some digit
 
 -- -- gets stream contained within a pair of matching open/close patterns
 -- matchPairsFun :: Stream s => Parser s a -> Parser s b -> Parser s s

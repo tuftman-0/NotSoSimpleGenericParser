@@ -99,10 +99,11 @@ import Data.Foldable (asum)
 import Data.Kind (Type)
 import qualified Data.List as List
 import Data.String (IsString)
-import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BSC
-import Data.Text (Text)
 import qualified Data.Text as T
+import Data.ByteString (ByteString)
+import Data.Text (Text)
+
 
 type ParseError = String
 
@@ -293,6 +294,9 @@ ifP condP thenP elseP = do
         Just _  -> thenP
         Nothing -> elseP
 
+-- ifP' :: Parser s a -> Parser s b -> Parser s b -> Parser s b
+-- ifP' condP thenP elseP = optional condP >>= maybe elseP (const thenP)
+
 -- *TODO* do something like ultra debug mode or something
 ifPdebug :: Parser s a -> Parser s b -> Parser s b -> Parser s b
 ifPdebug p thenP elseP = do
@@ -350,7 +354,7 @@ endOfInput :: (Stream s) => Parser s ()
 endOfInput = peekNot anyToken `wError` "Expected end of input"
 
 -- Match a token that satisfies a predicate, also takes a string representing what was expected
-satisfy :: (Stream s) => (Elem s -> Bool) -> String -> Parser s (Elem s)
+satisfy :: (Stream s) => (Elem s -> Bool) -> ParseError -> Parser s (Elem s)
 satisfy pred expected = try $ do
     t <- anyToken `wErrorMod` \msg -> msg ++ ", Expected " ++ expected
     if pred t
@@ -479,9 +483,7 @@ boundedThen lo hi p suffix = do
         tryAt [] = fail "suffix never matched"
         tryAt ((i, st) : rest) =
             rollback st
-                *> ( (take i results,)
-                        <$> suffix
-                            <|> tryAt rest
+                *> ( (take i results,) <$> suffix <|> tryAt rest
                    )
     tryAt (reverse valid)
 

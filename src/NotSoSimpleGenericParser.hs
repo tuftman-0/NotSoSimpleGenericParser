@@ -103,6 +103,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Text as T
 import Data.ByteString (ByteString)
 import Data.Text (Text)
+import Data.Maybe (fromMaybe)
 
 
 type ParseError = String
@@ -117,8 +118,7 @@ pattern Failure err = Left err
 
 data ParserState s = ParserState
   { inputS :: s         -- The remaining input stream
-  , pos   :: Int       -- The current position in the input
-  -- , isCut :: Bool
+  , pos    :: Int       -- The current position in the input
   } deriving (Show, Eq)
 
 
@@ -284,18 +284,31 @@ instance Alternative (Parser s) where
                             EQ -> Failure (err1 ++ " or " ++ err2, st1)
                             LT -> Failure (err2, st2)
 
+-- Parse optional value
+optional :: Parser s a -> Parser s (Maybe a)
+optional p = (Just <$> p) <|> pure Nothing
+
+-- Parse one of a list of parsers (same as `choice = foldr (<|>) empty`)
+choice :: [Parser s a] -> Parser s a
+choice = asum
+
+succeeds :: Alternative f => f a -> f Bool
+succeeds p = (p *> pure True) <|> pure False
+
 -- Conditional branch parsing
 -----------------------------
 -- tries a parser, if it's successful return parser thenP otherwise return parser elseP
 ifP :: Parser s a -> Parser s b -> Parser s b -> Parser s b
 ifP condP thenP elseP = do
-    result <- optional condP
-    case result of
-        Just _  -> thenP
-        Nothing -> elseP
+    result <- succeeds condP
+    if result
+        then thenP
+        else elseP
 
 -- ifP' :: Parser s a -> Parser s b -> Parser s b -> Parser s b
+-- ifP' condP thenP elseP = try condP >>= either (const elseP) (const thenP)
 -- ifP' condP thenP elseP = optional condP >>= maybe elseP (const thenP)
+-- ifP' condP thenP elseP = fromMaybe elseP <$> (optional condP *> thenP)
 
 -- *TODO* do something like ultra debug mode or something
 ifPdebug :: Parser s a -> Parser s b -> Parser s b -> Parser s b
@@ -305,6 +318,7 @@ ifPdebug p thenP elseP = do
         Just _  -> thenP `wErrorMod` ("ifP (then):" ++)
         Nothing -> elseP `wErrorMod` ("ifP (else):" ++)
 
+-- aaaaaab
 -- construct for chaining parser ifP: Cond (p1) (p2) is like if (p1) succeeds then parser (p2)
 data Branch s a
     = forall c.
@@ -315,10 +329,10 @@ data Branch s a
 branches :: [Branch s a] -> Parser s a
 branches [] = empty
 branches (Cond cond action : rest) = do
-    result <- optional cond
-    case result of
-        Just _  -> action
-        Nothing -> branches rest
+    result <- succeeds cond
+    if result
+        then action
+        else branches rest
 branches (Otherwise action : _) = action
 
 
@@ -402,14 +416,6 @@ noneOf ts = satisfy (`notElem` ts) ("none of " ++ show ts)
 concatParsers :: (Foldable t, Monoid a) => t (Parser s a) -> Parser s a
 concatParsers = foldr (liftA2 mappend) (pure mempty)
 -- concatParsers = foldr (\x y -> (<>) <$> x <*> y) (pure mempty)
-
--- Parse optional value
-optional :: Parser s a -> Parser s (Maybe a)
-optional p = (Just <$> p) <|> pure Nothing
-
--- Parse one of a list of parsers (same as `choice = foldr (<|>) empty`)
-choice :: [Parser s a] -> Parser s a
-choice = asum
 
 -- exactly n repetitions of p
 count :: Int -> Parser s a -> Parser s [a]

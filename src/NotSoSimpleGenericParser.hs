@@ -40,6 +40,7 @@ module NotSoSimpleGenericParser (
     -- Combinators
     try,
     optional,
+    succeeds,
     ifP,
     branches,
     choice,
@@ -103,7 +104,6 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Text as T
 import Data.ByteString (ByteString)
 import Data.Text (Text)
-import Data.Maybe (fromMaybe)
 
 
 type ParseError = String
@@ -434,7 +434,7 @@ atLeast n p = (++) <$> count n p <*> many p
 
 
 manyTill :: Parser s a -> Parser s end -> Parser s [a]
-manyTill p end = (end *> pure []) <|> ((:) <$> p <*> manyTill p end)
+manyTill p end = (lookAhead end *> pure []) <|> ((:) <$> p <*> manyTill p end)
 
 search :: Stream s => Parser s a -> Parser s a
 search p = p <|> (anyToken *> search p)

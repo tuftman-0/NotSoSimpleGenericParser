@@ -10,6 +10,7 @@
 {-# HLINT ignore "Use $>" #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE MultiWayIf #-}
 -- {-# LANGUAGE NoMonomorphismRestriction #-}
 
 module NotSoSimpleGenericParser (
@@ -104,6 +105,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Text as T
 import Data.ByteString (ByteString)
 import Data.Text (Text)
+import Data.Bool (bool)
 
 
 type ParseError = String
@@ -139,7 +141,7 @@ newtype Parser s a = Parser
         ParserState s ->
         Either
             (ParseError, ParserState s)
-            (a, ParserState s)
+            (a,          ParserState s)
     }
 
 instance Show (Parser s a) where
@@ -236,53 +238,86 @@ instance CharStream ByteString where
 
 instance Functor (Parser s) where
     fmap :: (a -> b) -> Parser s a -> Parser s b
-    fmap f parser = Parser $ \st ->
-        case runParser parser st of
-            Success (v, rest) -> Success (f v, rest)
-            Failure err -> Failure err
+
+    fmap f p = do
+        result <- p
+        return (f result)
+
+    -- fmap f p = Parser $ \st ->
+    --     case runParser p st of
+    --         Success (v, rest) -> Success (f v, rest)
+    --         Failure err -> Failure err
 
 instance Applicative (Parser s) where
     pure :: a -> Parser s a
     pure x = Parser $ \st -> Success (x, st)
 
     (<*>) :: Parser s (a -> b) -> Parser s a -> Parser s b
-    pf <*> px = Parser $ \st ->
-        case runParser pf st of
-            Failure err -> Failure err
-            Success (f, rest) ->
-                case runParser px rest of
-                    Failure err -> Failure err
-                    Success (x, rest') -> Success (f x, rest')
+    pf <*> px = do
+        f <- pf
+        x <- px
+        return (f x)
+
+    -- (<*>) :: Parser s (a -> b) -> Parser s a -> Parser s b
+    -- pf <*> px = Parser $ \st ->
+    --     case runParser pf st of
+    --         Failure err -> Failure err
+    --         Success (f, st') ->
+    --             case runParser px st' of
+    --                 Failure err -> Failure err
+    --                 Success (x, st'') -> Success (f x, st'')
 
 instance Monad (Parser s) where
     (>>=) :: Parser s a -> (a -> Parser s b) -> Parser s b
-    parser >>= f = Parser $ \st ->
-        case runParser parser st of
+    p >>= f = Parser $ \st ->
+        case runParser p st of
             Failure err -> Failure err
-            Success (v, rest) -> runParser (f v) rest
+            Success (v, st') -> runParser (f v) st'
 
 instance MonadFail (Parser s) where
     fail :: String -> Parser s a
     fail msg = Parser $ \st -> Failure (msg, st)
 
+-- basically >>= but flips Success/Failure, passes successes through and focuses on errors
+onFailure :: Parser s a -> ((ParseError, ParserState s) -> Parser s a) -> Parser s a
+onFailure p f = do
+    st <- getState
+    case runParser p st of
+        Success res -> Parser $ \_ -> Success res
+        Failure err -> f err
+
 instance Alternative (Parser s) where
     empty = Parser $ \st ->
         Failure ("Empty parser", st)
 
+    -- (<|>) :: Parser s a -> Parser s a -> Parser s a
+    -- p1 <|> p2 = Parser $ \st ->
+    --     case runParser p1 st of
+    --         Success result -> Success result
+    --         -- if first parser fails try the second one on the original state
+    --         Failure (err1, st1) ->
+    --             case runParser p2 st of
+    --                 Success result -> Success result
+    --                 -- if both parsers fail take the error from the parser that consumed more
+    --                 Failure (err2, st2) ->
+    --                     case compare (pos st1) (pos st2) of
+    --                         GT -> Failure (err1, st1)
+    --                         EQ -> Failure (err1 ++ " or " ++ err2, st1)
+    --                         LT -> Failure (err2, st2)
+
     (<|>) :: Parser s a -> Parser s a -> Parser s a
-    p1 <|> p2 = Parser $ \st ->
-        case runParser p1 st of
-            Success result -> Success result
-            -- if first parser fails try the second one on the original state
-            Failure (err1, st1) ->
-                case runParser p2 st of
-                    Success result -> Success result
-                    -- if both parsers fail take the error from the parser that consumed more
-                    Failure (err2, st2) ->
-                        case compare (pos st1) (pos st2) of
-                            GT -> Failure (err1, st1)
-                            EQ -> Failure (err1 ++ " or " ++ err2, st1)
-                            LT -> Failure (err2, st2)
+    p1 <|> p2 = do
+        st0 <- getState -- save initial state
+        p1 `onFailure` \(err1, st1) -> do
+            putState st0 -- on failure backtrack to initial state
+            p2 `onFailure` \(err2, st2) -> Parser $ \_ ->
+                case compare (pos st1) (pos st2) of
+                    GT -> Failure (err1, st1)
+                    EQ -> Failure (err1 ++ " or " ++ err2, st1)
+                    LT -> Failure (err2, st2)
+
+-- cut :: Parser s ()
+-- cut = 
 
 -- Parse optional value
 optional :: Parser s a -> Parser s (Maybe a)
@@ -305,18 +340,17 @@ ifP condP thenP elseP = do
         then thenP
         else elseP
 
--- ifP' :: Parser s a -> Parser s b -> Parser s b -> Parser s b
--- ifP' condP thenP elseP = try condP >>= either (const elseP) (const thenP)
--- ifP' condP thenP elseP = optional condP >>= maybe elseP (const thenP)
--- ifP' condP thenP elseP = fromMaybe elseP <$> (optional condP *> thenP)
+
+ifP' :: Parser s a -> Parser s b -> Parser s b -> Parser s b
+ifP' condP thenP elseP = succeeds condP >>= bool thenP elseP
 
 -- *TODO* do something like ultra debug mode or something
 ifPdebug :: Parser s a -> Parser s b -> Parser s b -> Parser s b
 ifPdebug p thenP elseP = do
-    result <- optional p
-    case result of
-        Just _  -> thenP `wErrorMod` ("ifP (then):" ++)
-        Nothing -> elseP `wErrorMod` ("ifP (else):" ++)
+    result <- succeeds p
+    if result
+        then thenP `wErrorMod` ("ifP (then):" ++)
+        else elseP `wErrorMod` ("ifP (else):" ++)
 
 -- aaaaaab
 -- construct for chaining parser ifP: Cond (p1) (p2) is like if (p1) succeeds then parser (p2)
@@ -350,11 +384,6 @@ toTokens stream = case runParser (many anyToken) (mkInitialState stream) of
     Success (result, _) -> result
     _ -> []
 
--- toTokens' :: Stream s => s -> [Elem s]
--- toTokens' s = case uncons s of
---     Just (x, rest) -> x : toTokens' rest
---     _ -> []
-
 -- Get any token
 anyToken :: (Stream s) => Parser s (Elem s)
 anyToken = Parser $ \st ->
@@ -376,6 +405,7 @@ satisfy pred expected = try $ do
         else fail $ "Expected " ++ expected ++ ", found " ++ show t
 
 -- Parse a specific token
+
 token :: (Stream s) => Elem s -> Parser s (Elem s)
 token t = satisfy (== t) (show t)
 
@@ -439,26 +469,6 @@ manyTill p end = (lookAhead end *> pure []) <|> ((:) <$> p <*> manyTill p end)
 search :: Stream s => Parser s a -> Parser s a
 search p = p <|> (anyToken *> search p)
 
--- Grab the current state
-getState :: Parser s (ParserState s)
-getState = Parser $ \st -> Success (st, st)
-
--- Unconditionally restore a saved state
-putState :: ParserState s -> Parser s ()
-putState st' = Parser $ \_ -> Success ((), st')
-
-
--- checkpoint :: Parser s a -> Parser s (a, ParserState s)
--- checkpoint p = do
---     x <- p
---     st <- getState
---     pure (x, st)
-
-checkpoint :: Parser s a -> Parser s (a, ParserState s)
-checkpoint p = (,) <$> p <*> getState
-
-rollback :: ParserState s -> Parser s ()
-rollback = putState
 
 collectUpTo :: Int -> Parser s a -> Parser s [(a, ParserState s)]
 collectUpTo n p = go n []
@@ -497,6 +507,22 @@ boundedThen lo hi p suffix = do
 bounded :: Int -> Int -> Parser s a -> Parser s [a]
 bounded lo hi p = fst <$> boundedThen lo hi p (pure ())
 
+-- Grab the current state
+getState :: Parser s (ParserState s)
+getState = Parser $ \st -> Success (st, st)
+
+-- Unconditionally restore a saved state
+putState :: ParserState s -> Parser s ()
+putState st' = Parser $ \_ -> Success ((), st')
+
+
+checkpoint :: Parser s a -> Parser s (a, ParserState s)
+checkpoint p = (,) <$> p <*> getState
+
+rollback :: ParserState s -> Parser s ()
+rollback = putState
+
+-- failW
 
 -- tries a parser but on failure doesn't consume input (mostly used for manipulating errors and stuff)
 try :: Parser s a -> Parser s a
@@ -504,6 +530,10 @@ try p = Parser $ \st ->
     case runParser p st of
         Failure (err, _) -> Failure (err, st)
         success -> success
+-- try p = do
+--     st <- getState
+--     p `onFailure` \(err,_) -> putState st *> fail err
+
 
 -- tries a parser but doesn't consume input *TODO* maybe rename to peek
 lookAhead :: Parser s a -> Parser s a
@@ -519,6 +549,9 @@ peekNot p = Parser $ \st ->
     case runParser p st of
         Success _ -> Failure ("peekNot: parser matched", st)
         Failure _ -> Success ((), st)
+-- peekNot p = lookAhead $ ifP p
+--     (fail "peekNot: parser matched")
+--     (pure ())
 
 
 -- negates success and failure retaining consumption behaviour
@@ -535,15 +568,21 @@ revive defaultVal p = Parser $ \st ->
         success -> success
 
 
-
+-- failWith :: (ParseError, ParserState s) -> Parser s a
+-- failWith (msg, st) = Parser $ \_ -> Failure (msg, st)
+failWith :: ParseError -> ParserState s -> Parser s a
+failWith msg st = Parser $ \_ -> Failure (msg, st)
 
 -- modifies the error of a parser on failure using a function
 modifyError :: (ParseError -> ParseError) -> Parser s a -> Parser s a
-modifyError modify p = Parser $ \st ->
-    case runParser p st of
-        Failure (msg, st') -> Failure (modify msg, st')
-        success -> success
+-- modifyError modify p = Parser $ \st ->
+--     case runParser p st of
+--         Failure (msg, st') -> Failure (modify msg, st')
+--         success -> success
 
+-- modifyError modify p = p `onFailure` \(err, st) -> failWith (modify err, st)
+modifyError modify p = p `onFailure` \(err, st) -> failWith (modify err) st
+-- modifyError modify = (`onFailure` uncurry (failWith . modify))
 
 setError :: ParseError -> Parser s a -> Parser s a
 setError = modifyError . const
@@ -562,11 +601,17 @@ forceFail p msg = p `wError` msg *> fail msg
 
 -- takes a parser and gives you the result and the amount consumed
 wConsumed :: (Stream s) => Parser s a -> Parser s (a, s)
-wConsumed p = Parser $ \st ->
-    case runParser p st of
-        Success (res, st') -> Success ( (res, consumed), st' )
-            where consumed = takeS (pos st' - pos st) (inputS st)
-        Failure (err, st') -> Failure (err, st')
+-- wConsumed p = Parser $ \st ->
+--     case runParser p st of
+--         Success (res, st') -> Success ( (res, consumed), st' )
+--             where consumed = takeS (pos st' - pos st) (inputS st)
+--         Failure (err, st') -> Failure (err, st')
+wConsumed p = do
+    st0 <- getState
+    result <- p
+    st1 <- getState
+    let consumed = takeS (pos st1 - pos st0) (inputS st0)
+    return (result, consumed)
 
 
 -- takes a parser gives a parser whose result is what the first consumes
@@ -587,10 +632,10 @@ matchPairs open close = getConsumed (token open *> go 1)
     go 0 = pure ()
     go n = do
         t <- anyToken `wErrorMod` (\msg -> "matchPairs: " ++ msg ++ ", " ++ show n ++ " unmatched delimiters")
-        case t of
-            _ | t == open  -> go (n + 1)
-              | t == close -> go (n - 1)
-              | otherwise  -> go n
+        if | t == open  -> go (n + 1)
+           | t == close -> go (n - 1)
+           | otherwise  -> go n
+
 
 
 

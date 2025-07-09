@@ -101,6 +101,7 @@ import Data.Monoid (Monoid, mappend, mempty)
 import Data.String (IsString)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Control.Monad (liftM, ap)
 
 type ParseError = String
 
@@ -253,9 +254,7 @@ instance CharStream ByteString where
 
 instance Functor (Parser s) where
   fmap :: (a -> b) -> Parser s a -> Parser s b
-  fmap f p = do
-    result <- p
-    return (f result)
+  fmap = liftM
 
 -- fmap f p = Parser $ \st ->
 --     case runParser p st of
@@ -267,10 +266,11 @@ instance Applicative (Parser s) where
   pure x = Parser $ \st -> Success (x, st)
 
   (<*>) :: Parser s (a -> b) -> Parser s a -> Parser s b
-  pf <*> px = do
-    f <- pf
-    x <- px
-    return (f x)
+  (<*>) = ap
+  -- pf <*> px = do
+  --   f <- pf
+  --   x <- px
+  --   return (f x)
 
 -- (<*>) :: Parser s (a -> b) -> Parser s a -> Parser s b
 -- pf <*> px = Parser $ \st ->
@@ -288,6 +288,8 @@ instance Monad (Parser s) where
       Success (v, st') -> runParser (f v) st'
       Failure err -> Failure err
 
+asdf :: Parser s (Parser s a) -> Parser s a
+asdf = join
 -- p >>= f = p `onSuccess` \(v, st) -> Parser $ \_ -> runParser (f v) st
 
 instance MonadFail (Parser s) where
@@ -308,25 +310,30 @@ onSuccess p f = do
   st <- getState
   case runParser p st of
     Success res -> f res
-    Failure err -> failWith err
+    Failure err -> Parser . const $ Failure err
 
 failWith :: (ParseError, ParserState s) -> Parser s a
 failWith err = Parser $ \_ -> Failure err
 
+
 succeedWith :: (a, ParserState s) -> Parser s a
-succeedWith (res, st) = Parser $ \_ -> Success (res, st)
+succeedWith res = Parser $ \_ -> Success res
+
+succeedWith' = Parser . const . Success
+failWith' = Parser . const . Failure
+
+asdf :: Either (ParseError, ParserState s) (a, ParserState s) -> Parser s a
+asdf = Parser . const
+bsdf :: (ParseError, ParserState s) -> Parser s a
+bsdf = asdf . Failure
 
 -- modifies the error of a parser on failure using a function
 modifyError :: (ParseError -> ParseError) -> Parser s a -> Parser s a
--- modifyError modify p = Parser $ \st ->
---     case runParser p st of
---         Failure (msg, st') -> Failure (modify msg, st')
---         success -> success
-
 modifyError modify p = p `onFailure` \(err, st) -> failWith (modify err, st)
 
--- modifyError modify p = p `onFailure` \(err, st) -> failWith (modify err) st
--- modifyError modify = (`onFailure` uncurry (failWith . modify))
+modifyError' :: (ParseError -> ParseError) -> Parser s a -> Parser s a
+-- modifyError' modify = (`onFailure` uncurry (curry failWith . modify))
+modifyError' = flip onFailure . uncurry . (curry failWith .)
 
 setError :: ParseError -> Parser s a -> Parser s a
 setError = modifyError . const

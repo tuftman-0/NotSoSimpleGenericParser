@@ -288,8 +288,6 @@ instance Monad (Parser s) where
       Success (v, st') -> runParser (f v) st'
       Failure err -> Failure err
 
-asdf :: Parser s (Parser s a) -> Parser s a
-asdf = join
 -- p >>= f = p `onSuccess` \(v, st) -> Parser $ \_ -> runParser (f v) st
 
 instance MonadFail (Parser s) where
@@ -322,10 +320,6 @@ succeedWith res = Parser $ \_ -> Success res
 succeedWith' = Parser . const . Success
 failWith' = Parser . const . Failure
 
-asdf :: Either (ParseError, ParserState s) (a, ParserState s) -> Parser s a
-asdf = Parser . const
-bsdf :: (ParseError, ParserState s) -> Parser s a
-bsdf = asdf . Failure
 
 -- modifies the error of a parser on failure using a function
 modifyError :: (ParseError -> ParseError) -> Parser s a -> Parser s a
